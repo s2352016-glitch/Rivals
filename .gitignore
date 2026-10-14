@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hypershot Arena</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #111;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+    }
+
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 10px;
+      height: 10px;
+      border: 2px solid rgba(255, 255, 255, 0.8);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #hud {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      color: white;
+      font-weight: bold;
+      font-size: 20px;
+      text-shadow: 2px 2px 4px #000;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      z-index: 20;
+    }
+
+    .btn {
+      background: #e63946;
+      border: none;
+      color: white;
+      padding: 15px 32px;
+      font-size: 18px;
+      font-weight: bold;
+      margin: 10px;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: 0.2s;
+    }
+
+    .btn:hover {
+      background: #f1faee;
+      color: #e63946;
+    }
+
+    #case-modal {
+      display: none;
+      background: rgba(20, 20, 20, 0.95);
+      padding: 30px;
+      border-radius: 12px;
+      border: 2px solid #e63946;
+      text-align: center;
+    }
+
+    .case-item {
+      font-size: 24px;
+      margin: 20px 0;
+      padding: 10px;
+      border-radius: 6px;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <div id="crosshair"></div>
+  <div id="hud">
+    Health: <span id="hp">100</span> | Ammo: <span id="ammo">30</span> | Kills: <span id="kills">0</span><br>
+    Skin: <span id="skin-name" style="color: #4cc9f0;">Default Gray</span>
+  </div>
+
+  <div id="overlay">
+    <h1 style="font-size: 48px; margin-bottom: 10px;">HYPERSHOT ARENA</h1>
+    <p>Controls: WASD = Move | Space = Jump | Shift = Slide | Left Click = Shoot</p>
+    <button class="btn" id="play-btn">PLAY GAME</button>
+    <button class="btn" id="case-btn">OPEN SKIN CASE</button>
+
+    <div id="case-modal">
+      <h2>WEAPON CASE UNBOXING</h2>
+      <div id="case-display" class="case-item">Click Open to Spin!</div>
+      <button class="btn" id="spin-btn">SPIN (FREE)</button>
+      <button class="btn" id="close-case-btn">BACK</button>
+    </div>
+  </div>
+
+  <script>
+    // --- GAME ENGINE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb);
+    scene.fog = new THREE.FogExp2(0x87ceeb, 0.015);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // --- LIGHTING ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(20, 40, 20);
+    scene.add(dirLight);
+
+    // --- MAP BUILD ---
+    const floorGeo = new THREE.PlaneGeometry(200, 200);
+    const floorMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+
+    // Obstacles
+    const boxGeo = new THREE.BoxGeometry(4, 4, 4);
+    const boxMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+    for(let i = 0; i < 30; i++) {
+      const box = new THREE.Mesh(boxGeo, boxMat);
+      box.position.set((Math.random() - 0.5) * 160, 2, (Math.random() - 0.5) * 160);
+      scene.add(box);
+    }
+
+    // --- WEAPON & SKINS ---
+    const gunGroup = new THREE.Group();
+    const gunGeo = new THREE.BoxGeometry(0.3, 0.4, 1.5);
+    let currentSkinColor = 0x777777;
+    let gunMat = new THREE.MeshLambertMaterial({ color: currentSkinColor });
+    const gunMesh = new THREE.Mesh(gunGeo, gunMat);
+    gunMesh.position.set(0.4, -0.3, -0.8);
+    gunGroup.add(gunMesh);
+    camera.add(gunGroup);
+    scene.add(camera);
+
+    const skins = [
+      { name: "Common Slate", color: 0x555555, rarity: "Common" },
+      { name: "Neon Cyan", color: 0x00f5d4, rarity: "Rare" },
+      { name: "Hyper Crimson", color: 0xf72585, rarity: "Epic" },
+      { name: "Gold Legend", color: 0xffd700, rarity: "Legendary" }
+    ];
+
+    // --- PLAYER & MOVEMENT STATE ---
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let isJumping = false, isSliding = false;
+    let velocityY = 0;
+    const gravity = -0.015;
+    let speed = 0.2;
+    let kills = 0;
+    let ammo = 30;
+
+    // --- ENEMIES ---
+    const enemies = [];
+    const enemyGeo = new THREE.BoxGeometry(2, 4, 2);
+    const enemyMat = new THREE.MeshLambertMaterial({ color: 0xe63946 });
+
+    function spawnEnemy() {
+      const enemy = new THREE.Mesh(enemyGeo, enemyMat);
+      enemy.position.set((Math.random() - 0.5) * 100, 2, (Math.random() - 0.5) * 100);
+      scene.add(enemy);
+      enemies.push(enemy);
+    }
+    for(let i = 0; i < 6; i++) spawnEnemy();
+
+    // --- CONTROLS ---
+    const overlay = document.getElementById('overlay');
+    const playBtn = document.getElementById('play-btn');
+
+    playBtn.addEventListener('click', () => {
+      document.body.requestPointerLock();
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement === document.body) {
+        overlay.style.display = 'none';
+      } else {
+        overlay.style.display = 'flex';
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyW') moveForward = true;
+      if (e.code === 'KeyS') moveBackward = true;
+      if (e.code === 'KeyA') moveLeft = true;
+      if (e.code === 'KeyD') moveRight = true;
+      if (e.code === 'Space' && !isJumping) {
+        velocityY = 0.35;
+        isJumping = true;
+      }
+      if (e.code === 'ShiftLeft') {
+        isSliding = true;
+        speed = 0.35;
+        camera.position.y = 1;
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'KeyW') moveForward = false;
+      if (e.code === 'KeyS') moveBackward = false;
+      if (e.code === 'KeyA') moveLeft = false;
+      if (e.code === 'KeyD') moveRight = false;
+      if (e.code === 'ShiftLeft') {
+        isSliding = false;
+        speed = 0.2;
+        camera.position.y = 2;
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement === document.body) {
+        camera.rotation.y -= e.movementX * 0.002;
+        camera.rotation.x -= e.movementY * 0.002;
+        camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+      }
+    });
+
+    // --- SHOOTING SYSTEM ---
+    const raycaster = new THREE.Raycaster();
+    document.addEventListener('mousedown', (e) => {
+      if (document.pointerLockElement === document.body && e.button === 0) {
+        if (ammo <= 0) return;
+        ammo--;
+        document.getElementById('ammo').innerText = ammo;
+
+        // Recoil effect
+        gunMesh.position.z = -0.6;
+        setTimeout(() => gunMesh.position.z = -0.8, 50);
+
+        // Raycast hit check
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        const hits = raycaster.intersectObjects(enemies);
+
+        if (hits.length > 0) {
+          const hitEnemy = hits[0].object;
+          scene.remove(hitEnemy);
+          enemies.splice(enemies.indexOf(hitEnemy), 1);
+          kills++;
+          document.getElementById('kills').innerText = kills;
+          spawnEnemy();
+        }
+      }
+    });
+
+    // --- SKIN CASE UNBOXING SYSTEM ---
+    const caseBtn = document.getElementById('case-btn');
+    const caseModal = document.getElementById('case-modal');
+    const closeCaseBtn = document.getElementById('close-case-btn');
+    const spinBtn = document.getElementById('spin-btn');
+    const caseDisplay = document.getElementById('case-display');
+
+    caseBtn.addEventListener('click', () => { caseModal.style.display = 'block'; });
+    closeCaseBtn.addEventListener('click', () => { caseModal.style.display = 'none'; });
+
+    spinBtn.addEventListener('click', () => {
+      let counter = 0;
+      spinBtn.disabled = true;
+      
+      const interval = setInterval(() => {
+        const randomSkin = skins[Math.floor(Math.random() * skins.length)];
+        caseDisplay.innerText = randomSkin.name;
+        caseDisplay.style.color = "#" + randomSkin.color.toString(16);
+        counter++;
+
+        if (counter > 20) {
+          clearInterval(interval);
+          const finalSkin = skins[Math.floor(Math.random() * skins.length)];
+          caseDisplay.innerText = "WON: " + finalSkin.name + "!";
+          gunMat.color.setHex(finalSkin.color);
+          document.getElementById('skin-name').innerText = finalSkin.name;
+          document.getElementById('skin-name').style.color = "#" + finalSkin.color.toString(16);
+          spinBtn.disabled = false;
+        }
+      }, 100);
+    });
+
+    // --- GAME LOOP ---
+    camera.position.y = 2;
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (document.pointerLockElement === document.body) {
+        // Player movement direction
+        const dir = new THREE.Vector3();
+        if (moveForward) dir.z -= 1;
+        if (moveBackward) dir.z += 1;
+        if (moveLeft) dir.x -= 1;
+        if (moveRight) dir.x += 1;
+        dir.normalize();
+        dir.applyQuaternion(camera.quaternion);
+        dir.y = 0;
+
+        camera.position.addScaledVector(dir, speed);
+
+        // Jump & Gravity physics
+        camera.position.y += velocityY;
+        velocityY += gravity;
+
+        const groundLevel = isSliding ? 1 : 2;
+        if (camera.position.y <= groundLevel) {
+          camera.position.y = groundLevel;
+          velocityY = 0;
+          isJumping = false;
+        }
+
+        // Auto reload
+        if (ammo <= 0) {
+          setTimeout(() => { ammo = 30; document.getElementById('ammo').innerText = ammo; }, 1500);
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
